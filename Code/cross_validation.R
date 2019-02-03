@@ -11,9 +11,11 @@ library(doSNOW) ## parallel computation
 ## read data
 data <- fread('Data/BADS_WS1718_known.csv')
 
-features <- c('return','item_price') ## list of features 
+features <- names(data)  ## list of features 
 
 grid.xgboost <- crossing(max_depth = 2:10, eta = (1:7) / 10, nrounds = 20) ## parameter grid
+
+start.time <- Sys.time() ## calculate run time 
 
 ## cross validation to choose best set of parameters
 folds <- createFolds(data$return, k = 10) ## 10-fold cross validation
@@ -44,15 +46,12 @@ for(i in 1:10){ ## folds
     predicted.class <- ifelse(predicted.probabilities > 0.5, 1, 0) ## return or no return
     
     c(1- model$evaluation_log$train_error[grid.xgboost$nrounds[i]],accuracy(data.ts$return, predicted.class)) ## results accuracy
-    #cv.results.ts[j, i] <- accuracy(data.ts$return, predicted.class) ## accuracy test
-    #cv.results.tr[j, i] <- 1- model$evaluation_log$train_error[grid.xgboost$nrounds[i]] ## accuracy training
   }
   
   stopCluster(cl) ## stop parallel computing
   
   cv.results.tr[, i] <- cv.results[, 1]
   cv.results.ts[, i] <- cv.results[, 2]
-  
   
 }
 
@@ -92,15 +91,16 @@ cv2.results <- foreach(i = 1:10, .packages = c('dplyr', 'xgboost','Metrics')) %d
   predicted.class <- ifelse(predicted.probabilities > 0.5, 1, 0) ## return or no return
   
   accuracy(data.ts$return, predicted.class)  
-  #cv2.results[i] <- accuracy(data.ts$return, predicted.class)
 }
 
 stopCluster(cl) ## stop parallel computing
 
 cv2.results %>% unlist %>% mean ## evaluate model
 
+end.time <- Sys.time() ## calculate run time 
 
+end.time - start.time
 
-
-
-
+## analyse variable importance
+importance_matrix <- xgb.importance(colnames(data.tr.xgb), model = model)
+xgb.plot.importance(importance_matrix)
