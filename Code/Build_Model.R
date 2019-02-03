@@ -5,6 +5,8 @@ library(dplyr)
 library(xgboost)
 library(Metrics) ## calculate errors
 library(caret) ## cross validation
+library(foreach) ## parallel computation
+library(doSNOW) ## parallel computation
 
 ## read data
 data <- fread('Data/BADS_WS1718_known.csv')
@@ -29,7 +31,11 @@ for(i in 1:10){ ## folds
   data.tr.xgb <- model.matrix(return~.-1, data.tr %>% subset(select = features)) 
   data.ts.xgb <- model.matrix(return~.-1, data.ts %>% subset(select = features)) 
   
-  for(j in 1:nrow(grid.xgboost)){ ## paramters
+  ## settings for parallel computing
+  cl<-makeCluster(2) #change the 2 to your number of CPU cores
+  registerDoSNOW(cl)
+  
+  cv.results <- foreach(j = 1:nrow(grid.xgboost), .packages = c('dplyr', 'xgboost','Metrics'), .combine = rbind) %dopar% { ## paramters
     
     model <- xgboost(data.tr.xgb, label = data.tr$return, max_depth = grid.xgboost$max_depth[j], eta = grid.xgboost$eta[j], nthread = 2, 
                      nrounds = grid.xgboost$nrounds[i], colsample_bytree = 1, eval_metric = 'error', verbose = 0)
@@ -37,9 +43,17 @@ for(i in 1:10){ ## folds
     predicted.probabilities <- predict(model, newdata = data.ts.xgb) ## predict probability of return
     predicted.class <- ifelse(predicted.probabilities > 0.5, 1, 0) ## return or no return
     
-    cv.results.ts[j, i] <- accuracy(data.ts$return, predicted.class) ## accuracy test
-    cv.results.tr[j, i] <- 1- model$evaluation_log$train_error[grid.xgboost$nrounds[i]] ## accuracy training
+    c(1- model$evaluation_log$train_error[grid.xgboost$nrounds[i]],accuracy(data.ts$return, predicted.class)) ## results accuracy
+    #cv.results.ts[j, i] <- accuracy(data.ts$return, predicted.class) ## accuracy test
+    #cv.results.tr[j, i] <- 1- model$evaluation_log$train_error[grid.xgboost$nrounds[i]] ## accuracy training
   }
+  
+  stopCluster(cl) ## stop parallel computing
+  
+  cv.results.tr[, i] <- cv.results[, 1]
+  cv.results.ts[, i] <- cv.results[, 2]
+  
+  
 }
 
 ## choose best set of parameters 
@@ -54,9 +68,12 @@ apply(cv.results.ts, 1, mean)[index.best.parameters]
 ## 2nd cross validation to evaluate model performance
 ## (The result of the above CV may be biased, because a parameter selection according to accuracy took place)
 folds2 <- createFolds(data$return, k = 10) ## 10-fold cross validation
-cv2.results <- rep(0,10)
 
-for(i in 1:10){ ## folds
+## settings for parallel computing
+cl<-makeCluster(2) #change the 2 to your number of CPU cores
+registerDoSNOW(cl)
+
+cv2.results <- foreach(i = 1:10, .packages = c('dplyr', 'xgboost','Metrics')) %dopar% { ## folds
   
   ## divide into training and test set
   data.tr <- data[-folds2[[i]],]
@@ -73,11 +90,14 @@ for(i in 1:10){ ## folds
     
   predicted.probabilities <- predict(model, newdata = data.ts.xgb) ## predict probability of return
   predicted.class <- ifelse(predicted.probabilities > 0.5, 1, 0) ## return or no return
-    
-  cv2.results[i] <- accuracy(data.ts$return, predicted.class)
+  
+  accuracy(data.ts$return, predicted.class)  
+  #cv2.results[i] <- accuracy(data.ts$return, predicted.class)
 }
 
-mean(cv2.results) ## result
+stopCluster(cl) ## stop parallel computing
+
+cv2.results %>% unlist %>% mean ## evaluate model
 
 
 
